@@ -1,5 +1,7 @@
 """
 预计算Mol2Vec分子嵌入 for MOSES2 Dataset
+使用官方mol2vec库: https://github.com/samoturk/mol2vec
+
 Mol2Vec: 基于Word2Vec的无监督分子表示学习
 - 将分子片段(Morgan substructures)视为"词"
 - 使用预训练的Word2Vec模型生成300维语义嵌入
@@ -12,21 +14,32 @@ Mol2Vec: 基于Word2Vec的无监督分子表示学习
 import numpy as np
 import pandas as pd
 from rdkit import Chem
-from rdkit.Chem import AllChem
 from rdkit import RDLogger
-from gensim.models import word2vec
 from tqdm import tqdm
 import argparse
 import os
 import sys
-import pickle
 
 # 关闭RDKit警告
 RDLogger.DisableLog('rdApp.*')
 
+# 尝试导入mol2vec库
+try:
+    from mol2vec.features import mol2alt_sentence, MolSentence, DfVec, sentences2vec
+    from gensim.models import word2vec
+    HAS_MOL2VEC = True
+    print("✓ 检测到mol2vec库")
+except ImportError:
+    HAS_MOL2VEC = False
+    print("⚠️  未检测到mol2vec库，将使用备用实现")
+    print("建议安装: pip install git+https://github.com/samoturk/mol2vec")
+    from gensim.models import word2vec
+    from rdkit.Chem import AllChem
 
-class MolSentence:
-    """将分子表示为Morgan片段的"句子" """
+
+# ============== 备用实现（如果没有安装mol2vec库） ==============
+class MolSentenceBackup:
+    """备用实现：将分子表示为Morgan片段的"句子" """
     def __init__(self, mol, radius=1):
         self.mol = mol
         self.radius = radius
@@ -41,50 +54,37 @@ class MolSentence:
         info = {}
         _ = AllChem.GetMorganFingerprint(self.mol, self.radius, bitInfo=info)
 
-        # 将子结构ID转换为"词"
+        # 将子结构ID转换为"词"（注意：这需要与预训练模型的格式匹配）
         mol_sentence = []
-        for fragment_id, occurrences in info.items():
-            # 将fragment_id转换为字符串作为"词"
-            word = f"frag_{fragment_id}"
+        for fragment_id in sorted(info.keys()):
+            # mol2vec使用标识符作为词，这里需要转换为字符串
+            word = str(fragment_id)
             mol_sentence.append(word)
 
         return mol_sentence if len(mol_sentence) > 0 else ['UNK']
 
 
-def mol_to_sentence(smiles, radius=1):
+def mol_to_sentence_backup(smiles, radius=1):
     """
-    将SMILES转换为Mol2Vec的"句子"表示
-    Args:
-        smiles: SMILES字符串
-        radius: Morgan片段半径(默认1,对应mol2vec论文设置)
-    Returns:
-        list: 分子片段的列表
+    备用实现：将SMILES转换为Mol2Vec的"句子"表示
     """
     try:
         mol = Chem.MolFromSmiles(smiles.strip())
         if mol is None:
             return None
 
-        mol_sent = MolSentence(mol, radius=radius)
+        mol_sent = MolSentenceBackup(mol, radius=radius)
         return mol_sent.sentence
     except Exception as e:
         return None
 
 
-def compute_mol2vec_embedding(smiles, model, radius=1, vector_size=300):
+def compute_mol2vec_embedding_backup(smiles, model, radius=1, vector_size=300):
     """
-    使用预训练的Mol2Vec模型计算分子嵌入
-    Args:
-        smiles: SMILES字符串
-        model: 预训练的Word2Vec模型
-        radius: Morgan片段半径
-        vector_size: 嵌入维度(默认300)
-    Returns:
-        numpy array: 分子嵌入向量(平均所有片段)
+    备用实现：使用预训练的Mol2Vec模型计算分子嵌入
     """
     try:
-        # 获取分子的"句子"表示
-        sentence = mol_to_sentence(smiles, radius=radius)
+        sentence = mol_to_sentence_backup(smiles, radius=radius)
 
         if sentence is None or len(sentence) == 0:
             return None
@@ -92,9 +92,12 @@ def compute_mol2vec_embedding(smiles, model, radius=1, vector_size=300):
         # 查找每个片段的嵌入
         vectors = []
         for word in sentence:
-            if word in model.wv:
-                vectors.append(model.wv[word])
-            # 如果片段不在词汇表中,跳过(稀有片段)
+            try:
+                if word in model.wv:
+                    vectors.append(model.wv[word])
+            except:
+                # 如果片段不在词汇表中,跳过
+                pass
 
         if len(vectors) == 0:
             # 如果所有片段都未知,返回零向量
@@ -102,11 +105,57 @@ def compute_mol2vec_embedding(smiles, model, radius=1, vector_size=300):
 
         # 平均所有片段嵌入得到分子嵌入
         mol_embedding = np.mean(vectors, axis=0).astype(np.float32)
-
         return mol_embedding
 
     except Exception as e:
         return None
+
+
+# ============== 官方mol2vec实现（推荐） ==============
+def compute_mol2vec_embedding_official(smiles, model, radius=1, vector_size=300):
+    """
+    使用官方mol2vec库计算分子嵌入
+    """
+    try:
+        mol = Chem.MolFromSmiles(smiles.strip())
+        if mol is None:
+            return None
+
+        # 使用官方mol2vec的mol2alt_sentence函数
+        # 这会生成与预训练模型兼容的分子句子
+        sentence = mol2alt_sentence(mol, radius=radius)
+
+        if sentence is None or len(sentence) == 0:
+            return None
+
+        # 计算句子的向量表示（平均所有词向量）
+        vectors = []
+        for word in sentence:
+            try:
+                if word in model.wv:
+                    vectors.append(model.wv[word])
+            except:
+                pass
+
+        if len(vectors) == 0:
+            return np.zeros(vector_size, dtype=np.float32)
+
+        mol_embedding = np.mean(vectors, axis=0).astype(np.float32)
+        return mol_embedding
+
+    except Exception as e:
+        return None
+
+
+# ============== 统一接口 ==============
+def compute_mol2vec_embedding(smiles, model, radius=1, vector_size=300):
+    """
+    自动选择最佳实现来计算Mol2Vec嵌入
+    """
+    if HAS_MOL2VEC:
+        return compute_mol2vec_embedding_official(smiles, model, radius, vector_size)
+    else:
+        return compute_mol2vec_embedding_backup(smiles, model, radius, vector_size)
 
 
 def load_mol2vec_model(model_path):
@@ -120,24 +169,24 @@ def load_mol2vec_model(model_path):
         raise FileNotFoundError(f"模型文件不存在: {model_path}")
 
     try:
-        # 尝试pickle格式
+        # 尝试不同的加载方式
         if model_path.endswith('.pkl'):
+            import pickle
             with open(model_path, 'rb') as f:
                 model = pickle.load(f)
             print(f"  格式: Pickle")
 
-        # 尝试gensim格式
         elif model_path.endswith('.model'):
             model = word2vec.Word2Vec.load(model_path)
             print(f"  格式: Gensim")
 
-        # 尝试word2vec binary格式
         elif model_path.endswith('.bin'):
             model = word2vec.Word2Vec.load_word2vec_format(model_path, binary=True)
             print(f"  格式: Word2Vec Binary")
 
         else:
             # 默认尝试pickle
+            import pickle
             with open(model_path, 'rb') as f:
                 model = pickle.load(f)
             print(f"  格式: 自动检测 (Pickle)")
@@ -149,19 +198,19 @@ def load_mol2vec_model(model_path):
         print(f"  嵌入维度: {vector_size}")
         print(f"  词汇表大小: {vocab_size:,} 个片段")
 
-        # 检查几个常见片段是否存在
-        sample_words = [w for w in list(model.wv.key_to_index.keys())[:5]]
-        print(f"  样本片段: {sample_words}")
+        # 显示几个样本词
+        sample_words = list(model.wv.key_to_index.keys())[:5]
+        print(f"  样本片段ID: {sample_words}")
 
         return model, vector_size
 
     except Exception as e:
         print(f"\n错误: 无法加载模型")
         print(f"详细信息: {str(e)}")
-        print(f"\n请确保模型文件格式正确:")
-        print(f"  - .pkl: Pickle格式")
-        print(f"  - .model: Gensim Word2Vec格式")
-        print(f"  - .bin: Word2Vec binary格式")
+        print(f"\n请确保:")
+        print(f"  1. 模型文件格式正确 (.pkl, .model, 或 .bin)")
+        print(f"  2. 使用与训练时相同的gensim版本")
+        print(f"  3. 文件未损坏")
         raise
 
 
@@ -206,6 +255,7 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
     print(f"输入数据: {csv_path}")
     print(f"模型文件: {model_path}")
     print(f"片段半径: {radius}")
+    print(f"实现方式: {'官方mol2vec库' if HAS_MOL2VEC else '备用实现'}")
 
     # 检查文件是否存在
     if not os.path.exists(csv_path):
@@ -243,7 +293,7 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
 
     # 开始计算Mol2Vec嵌入
     print(f"\n开始计算 {num_mols:,} 个分子的Mol2Vec嵌入...")
-    print(f"  - 方法: Mol2Vec (无监督)")
+    print(f"  - 方法: Mol2Vec ({'官方实现' if HAS_MOL2VEC else '备用实现'})")
     print(f"  - 片段半径: {radius}")
     print(f"  - 嵌入维度: {vector_size}")
     print(f"  - 聚合方式: 平均片段嵌入")
@@ -251,7 +301,6 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
     embeddings = np.zeros((num_mols, vector_size), dtype=np.float32)
     invalid_indices = []
     invalid_smiles = []
-    unknown_fragment_counts = []  # 统计未知片段
 
     for idx, smiles in enumerate(tqdm(smiles_list, desc="计算Mol2Vec", ncols=80)):
         if pd.isna(smiles) or smiles == '':
@@ -266,12 +315,6 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
             invalid_smiles.append(smiles[:50])  # 记录前50个字符
         else:
             embeddings[idx] = emb
-
-            # 统计未知片段比例(可选)
-            sentence = mol_to_sentence(smiles, radius=radius)
-            if sentence:
-                known = sum(1 for w in sentence if w in model.wv)
-                unknown_fragment_counts.append(1.0 - known / len(sentence))
 
     # 统计结果
     valid_count = num_mols - len(invalid_indices)
@@ -298,13 +341,6 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
     print(f"\n嵌入统计:")
     print(f"  非零嵌入: {non_zero_embs:,}")
     print(f"  平均L2范数: {avg_norm:.3f}")
-
-    if len(unknown_fragment_counts) > 0:
-        avg_unknown = np.mean(unknown_fragment_counts) * 100
-        print(f"  平均未知片段比例: {avg_unknown:.2f}%")
-        if avg_unknown > 30:
-            print(f"  ⚠️  警告: 超过30%的片段未知,可能影响嵌入质量")
-            print(f"      建议: 使用更大的预训练模型或在你的数据上微调")
 
     # 自动生成输出路径
     if output_path is None:
@@ -344,7 +380,7 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='为MOSES数据集预计算Mol2Vec分子嵌入',
+        description='为MOSES数据集预计算Mol2Vec分子嵌入（使用官方mol2vec库）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
@@ -359,17 +395,23 @@ def main():
       --model_path ./mol2vec_pretrained/model_300dim.pkl \\
       --output_path ./my_mol2vec_embeddings.npy
 
-  # 使用不同的片段半径
-  python precompute_mol2vec.py \\
-      --data_path ./datasets/moses2.csv \\
-      --model_path ./mol2vec_pretrained/model_300dim.pkl \\
-      --radius 2
+依赖安装:
+  # 安装官方mol2vec库（推荐）
+  pip install git+https://github.com/samoturk/mol2vec
+
+  # 或者手动安装
+  git clone https://github.com/samoturk/mol2vec.git
+  cd mol2vec
+  pip install -e .
+
+  # 基础依赖
+  pip install gensim==4.3.0 rdkit pandas numpy tqdm
 
 注意事项:
-  1. 模型文件路径必须指向有效的Mol2Vec预训练模型
-  2. 支持的模型格式: .pkl (pickle), .model (gensim), .bin (word2vec)
-  3. 推荐使用300维预训练模型 (model_300dim.pkl)
-  4. 片段半径默认为1 (与mol2vec论文一致)
+  1. 推荐安装官方mol2vec库以获得最佳兼容性
+  2. 如果没有安装mol2vec库，会使用备用实现（可能精度略低）
+  3. 模型文件路径必须指向有效的预训练模型
+  4. 支持的模型格式: .pkl (pickle), .model (gensim), .bin (word2vec)
         """
     )
 
@@ -407,13 +449,16 @@ def main():
     # 检查依赖
     try:
         from rdkit import Chem
+    except ImportError:
+        print(f"错误: 未安装RDKit!")
+        print(f"请安装: conda install -c conda-forge rdkit")
+        sys.exit(1)
+
+    try:
         from gensim.models import word2vec
-    except ImportError as e:
-        print(f"错误: 缺少依赖库!")
-        print(f"详细信息: {str(e)}")
-        print(f"\n请安装:")
-        print(f"  RDKit: conda install -c conda-forge rdkit")
-        print(f"  Gensim: pip install gensim==4.3.0")
+    except ImportError:
+        print(f"错误: 未安装Gensim!")
+        print(f"请安装: pip install gensim==4.3.0")
         sys.exit(1)
 
     # 执行预计算
