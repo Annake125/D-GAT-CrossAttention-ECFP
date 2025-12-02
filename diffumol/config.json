@@ -44,7 +44,8 @@
   "use_graph": true,
   "graph_embed_dim": 128,
   "graph_embed_path": "./hg_embed.pt",
-  "use_fingerprint": true,          
-  "fp_dim": 2048,                
-  "fingerprint_path": "./moses2_ecfp4_2048.npy"  
+  "use_fingerprint": true,
+  "fp_dim": 2048,
+  "fingerprint_path": "./moses2_ecfp4_2048.npy",
+  "diversity_weight": 0.1
 }

@@ -141,7 +141,8 @@ class GaussianDiffusion:
         sigma_small,
         use_kl,
         rescale_timesteps=False,
-        num_props=0
+        num_props=0,
+        diversity_weight=0.0
     ):
         self.rescale_timesteps = rescale_timesteps
         self.predict_xstart = predict_xstart
@@ -150,6 +151,7 @@ class GaussianDiffusion:
         self.sigma_small = sigma_small
         self.use_kl = use_kl
         self.num_props=num_props
+        self.diversity_weight = diversity_weight
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -582,6 +584,54 @@ class GaussianDiffusion:
 
         return {'pred_xprev':pred_prev, 'pred_xstart':pred_xstart}
 
+    def _compute_diversity_loss(self, fp_embs):
+        """
+        Compute diversity loss based on Tanimoto similarity within a batch.
+
+        The goal is to minimize the average pairwise similarity (maximize diversity)
+        between molecules in the batch, measured using ECFP fingerprints.
+
+        :param fp_embs: [B, fp_dim] tensor of ECFP fingerprints (binary or float)
+        :return: scalar tensor representing average Tanimoto similarity
+        """
+        if fp_embs is None or fp_embs.shape[0] < 2:
+            return th.tensor(0.0, device=fp_embs.device if fp_embs is not None else 'cpu')
+
+        # Binarize fingerprints (ensure 0/1 values)
+        fp_binary = (fp_embs > 0.5).float()
+
+        # Compute pairwise Tanimoto similarity
+        # Tanimoto(A, B) = |A ∩ B| / |A ∪ B| = dot(A, B) / (sum(A) + sum(B) - dot(A, B))
+
+        # Compute dot products: [B, B]
+        intersection = th.mm(fp_binary, fp_binary.t())
+
+        # Compute cardinalities: [B]
+        cardinalities = fp_binary.sum(dim=1)
+
+        # Compute union: [B, B]
+        # |A ∪ B| = |A| + |B| - |A ∩ B|
+        union = cardinalities.unsqueeze(1) + cardinalities.unsqueeze(0) - intersection
+
+        # Avoid division by zero
+        union = th.clamp(union, min=1e-8)
+
+        # Compute Tanimoto similarity matrix: [B, B]
+        tanimoto_sim = intersection / union
+
+        # Extract upper triangular part (exclude diagonal)
+        batch_size = fp_binary.shape[0]
+        mask = th.triu(th.ones(batch_size, batch_size, device=fp_embs.device), diagonal=1)
+
+        # Compute average pairwise similarity
+        num_pairs = batch_size * (batch_size - 1) / 2
+        if num_pairs > 0:
+            avg_similarity = (tanimoto_sim * mask).sum() / num_pairs
+        else:
+            avg_similarity = th.tensor(0.0, device=fp_embs.device)
+
+        return avg_similarity
+
     def training_losses_seq2seq(self, model, x_start, t, model_kwargs=None, noise=None):
         """
         Compute training losses for a single timestep.
@@ -680,8 +730,14 @@ class GaussianDiffusion:
                 mask=input_ids_mask, truncate=True, t=t
             )
 
+        # Compute diversity loss (if enabled and fingerprints are available)
+        diversity_loss = th.tensor(0.0, device=t.device)
+        if self.diversity_weight > 0 and fp_embs is not None:
+            diversity_loss = self._compute_diversity_loss(fp_embs)
+            terms["diversity"] = diversity_loss
+
         # Combine all loss terms
-        terms["loss"] = terms["mse"] + decoder_nll + tT_loss
+        terms["loss"] = terms["mse"] + decoder_nll + tT_loss + self.diversity_weight * diversity_loss
 
         return terms
 
