@@ -200,7 +200,8 @@ def create_model_and_diffusion(
     use_graph=False, # Add
     graph_embed_dim=128, # Add
     use_fingerprint=False,  # Add: 是否使用分子指纹
-    fp_dim=2048,  # Add: 指纹维度（ECFP默认2048）    
+    fp_dim=2048,  # Add: 指纹维度（ECFP默认2048）
+    diversity_lambda=0.0,  # Add: 多样性正则化权重
     **kwargs,
 ):
     model = TransformerNetModel(
@@ -232,7 +233,8 @@ def create_model_and_diffusion(
         sigma_small = sigma_small,
         use_kl = use_kl,
         rescale_learned_sigmas=rescale_learned_sigmas,
-        num_props=kwargs["num_props"]
+        num_props=kwargs["num_props"],
+        diversity_lambda=diversity_lambda  # Add: 传递多样性正则化权重
     )
 
     return model, diffusion

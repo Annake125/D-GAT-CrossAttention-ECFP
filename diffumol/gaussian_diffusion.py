@@ -141,7 +141,8 @@ class GaussianDiffusion:
         sigma_small,
         use_kl,
         rescale_timesteps=False,
-        num_props=0
+        num_props=0,
+        diversity_lambda=0.0
     ):
         self.rescale_timesteps = rescale_timesteps
         self.predict_xstart = predict_xstart
@@ -150,6 +151,7 @@ class GaussianDiffusion:
         self.sigma_small = sigma_small
         self.use_kl = use_kl
         self.num_props=num_props
+        self.diversity_lambda = diversity_lambda
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -680,8 +682,32 @@ class GaussianDiffusion:
                 mask=input_ids_mask, truncate=True, t=t
             )
 
+        # Diversity regularization: encourage different molecular structures
+        diversity_loss = th.tensor(0.0).to(x_start.device)
+        if self.diversity_lambda > 0 and model_out_x_start.shape[0] > 1:
+            # Flatten the embeddings: [batch_size, seq_len, hidden_dim] -> [batch_size, -1]
+            batch_size = model_out_x_start.shape[0]
+            flat_embeddings = model_out_x_start.reshape(batch_size, -1)
+
+            # Normalize embeddings for cosine similarity computation
+            flat_embeddings_norm = F.normalize(flat_embeddings, p=2, dim=1)
+
+            # Compute pairwise cosine similarities (Tanimoto-like measure)
+            # similarity_matrix: [batch_size, batch_size]
+            similarity_matrix = th.mm(flat_embeddings_norm, flat_embeddings_norm.t())
+
+            # Mask out diagonal (self-similarity)
+            mask = th.eye(batch_size, device=x_start.device).bool()
+            similarity_matrix = similarity_matrix.masked_fill(mask, 0.0)
+
+            # Diversity loss: penalize high similarity (encourage diversity)
+            # We want molecules to be different, so we minimize the average pairwise similarity
+            diversity_loss = similarity_matrix.abs().sum() / (batch_size * (batch_size - 1))
+
+        terms["diversity"] = diversity_loss * self.diversity_lambda
+
         # Combine all loss terms
-        terms["loss"] = terms["mse"] + decoder_nll + tT_loss
+        terms["loss"] = terms["mse"] + decoder_nll + tT_loss + terms["diversity"]
 
         return terms
 
