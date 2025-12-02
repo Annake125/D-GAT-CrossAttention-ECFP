@@ -606,9 +606,10 @@ class GaussianDiffusion:
 
         input_ids_x = model_kwargs.pop('input_ids').to(th.float).to(t.device)
 
-        # Extract graph_ids and fp_embs if present
+        # Extract graph_ids, fp_embs, and mol2vec_embs if present
         graph_ids = model_kwargs.pop('graph_idx', None) if model_kwargs else None
         fp_embs = model_kwargs.pop('fp_emb', None) if model_kwargs else None
+        mol2vec_embs = model_kwargs.pop('mol2vec_emb', None) if model_kwargs else None
 
         # Compute embeddings or property-conditional embeddings
         if self.num_props:
@@ -639,10 +640,12 @@ class GaussianDiffusion:
         terms = {}
         target = x_start
 
-        # Pass graph_ids and fp_embs when calling the model
+        # Pass graph_ids, fp_embs, and mol2vec_embs when calling the model
         if fp_embs is not None:
             fp_embs = fp_embs.to(t.device)
-        model_output = model(x_t, self._scale_timesteps(t), graph_ids=graph_ids, fp_embs=fp_embs, **model_kwargs)
+        if mol2vec_embs is not None:
+            mol2vec_embs = mol2vec_embs.to(t.device)
+        model_output = model(x_t, self._scale_timesteps(t), graph_ids=graph_ids, fp_embs=fp_embs, mol2vec_embs=mol2vec_embs, **model_kwargs)
         assert model_output.shape == target.shape == x_start.shape
 
         # Compute MSE loss

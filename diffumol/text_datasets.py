@@ -23,6 +23,7 @@ def load_data_text(
     loop=True,
     graph_embeddings=None, # Add
     fingerprints=None,  # Add: 预计算的分子指纹
+    mol2vec_embeddings=None,  # Add: 预计算的Mol2Vec嵌入
 ):
     """
     For a dataset, create a generator over (seqs, kwargs) pairs.
@@ -39,6 +40,7 @@ def load_data_text(
     :param loaded_vocab: loaded word vocabs.
     :param loop: loop to get batch data or not.
     :param fingerprints: precomputed molecular fingerprints (ECFP).
+    :param mol2vec_embeddings: precomputed Mol2Vec embeddings.
     """
 
     print('#'*30, '\nLoading text data...')
@@ -51,6 +53,7 @@ def load_data_text(
         model_emb=model_emb,
         graph_embeddings=graph_embeddings,  # Pass in precomputed graph embeddings
         fingerprints=fingerprints,  # Pass in precomputed fingerprints
+        mol2vec_embeddings=mol2vec_embeddings,  # Pass in precomputed Mol2Vec embeddings
     )
 
     if split != 'test':
@@ -207,7 +210,7 @@ def get_corpus(data_args, seq_len, split='train', loaded_vocab=None):
 
 
 class TextDataset(Dataset):
-    def __init__(self, text_datasets, data_args, model_emb=None, graph_embeddings=None, fingerprints=None):
+    def __init__(self, text_datasets, data_args, model_emb=None, graph_embeddings=None, fingerprints=None, mol2vec_embeddings=None):
         super().__init__()
         self.text_datasets = text_datasets
         self.length = len(self.text_datasets['train'])
@@ -218,7 +221,10 @@ class TextDataset(Dataset):
         self.use_graph = graph_embeddings is not None
         # Add: 分子指纹
         self.fingerprints = fingerprints
-        self.use_fingerprint = fingerprints is not None        
+        self.use_fingerprint = fingerprints is not None
+        # Add: Mol2Vec嵌入
+        self.mol2vec_embeddings = mol2vec_embeddings
+        self.use_mol2vec = mol2vec_embeddings is not None        
 
     def __len__(self):
         return self.length
@@ -241,7 +247,10 @@ class TextDataset(Dataset):
             # Add: 分子指纹
             if self.use_fingerprint:
                 out_kwargs['fp_emb'] = self.fingerprints[idx]
-                            
+            # Add: Mol2Vec嵌入
+            if self.use_mol2vec:
+                out_kwargs['mol2vec_emb'] = self.mol2vec_embeddings[idx]
+
             return arr, out_kwargs
 
 def _collate_batch_helper(examples, pad_token_id, max_length, return_mask=False):

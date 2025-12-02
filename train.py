@@ -56,7 +56,21 @@ def main():
         logger.log(f"### Loaded fingerprints with shape {fingerprints.shape}")
         # 转换为tensor
         fingerprints = torch.from_numpy(fingerprints).float()
-    
+
+    # Add: Load Mol2Vec embeddings
+    mol2vec_embeddings = None
+    if args.use_mol2vec:
+        logger.log(f"### Loading Mol2Vec embeddings from {args.mol2vec_path}")
+        mol2vec_embeddings = np.load(args.mol2vec_path)
+        logger.log(f"### Loaded Mol2Vec embeddings with shape {mol2vec_embeddings.shape}")
+        # 转换为tensor
+        mol2vec_embeddings = torch.from_numpy(mol2vec_embeddings).float()
+
+        # 如果同时使用ECFP和Mol2Vec,打印融合信息
+        if args.use_fingerprint:
+            logger.log("### [Gated Fusion] ECFP + Mol2Vec enabled")
+            logger.log(f"### ECFP dim: {fingerprints.shape[1]}, Mol2Vec dim: {mol2vec_embeddings.shape[1]}")
+
     tokenizer = load_tokenizer(args) 
     model_weight, tokenizer= load_model_emb(args, tokenizer) 
     
@@ -114,11 +128,12 @@ def main():
         data=train_data,
         data_args = args,
         loaded_vocab=tokenizer,
-        model_emb=model_weight, 
+        model_emb=model_weight,
         graph_embeddings=graph_embeddings, # Pass in graph embeddings
         fingerprints=fingerprints,  # Pass in molecular fingerprints
+        mol2vec_embeddings=mol2vec_embeddings,  # Pass in Mol2Vec embeddings
     )
-    
+
     data_valid = load_data_text(
         batch_size=args.batch_size,
         seq_len=args.seq_len,
@@ -127,9 +142,10 @@ def main():
         split='valid',
         deterministic=True,
         loaded_vocab=tokenizer,
-        model_emb=model_weight, 
+        model_emb=model_weight,
         graph_embeddings=graph_embeddings, # Pass in graph embeddings
         fingerprints=fingerprints,  # Pass in molecular fingerprints
+        mol2vec_embeddings=mol2vec_embeddings,  # Pass in Mol2Vec embeddings
     )
 
     print('#'*30, 'size of vocab', args.vocab_size)

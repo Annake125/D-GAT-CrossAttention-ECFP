@@ -200,7 +200,9 @@ def create_model_and_diffusion(
     use_graph=False, # Add
     graph_embed_dim=128, # Add
     use_fingerprint=False,  # Add: 是否使用分子指纹
-    fp_dim=2048,  # Add: 指纹维度（ECFP默认2048）    
+    fp_dim=2048,  # Add: 指纹维度（ECFP默认2048）
+    use_mol2vec=False,  # Add: 是否使用Mol2Vec
+    mol2vec_dim=300,  # Add: Mol2Vec维度（默认300）
     **kwargs,
 ):
     model = TransformerNetModel(
@@ -214,7 +216,9 @@ def create_model_and_diffusion(
         use_graph=use_graph, # Add
         graph_embed_dim=graph_embed_dim, # Add
         use_fingerprint=use_fingerprint,  # Add
-        fp_dim=fp_dim,  # Add        
+        fp_dim=fp_dim,  # Add
+        use_mol2vec=use_mol2vec,  # Add
+        mol2vec_dim=mol2vec_dim,  # Add
         **kwargs
     )
 
