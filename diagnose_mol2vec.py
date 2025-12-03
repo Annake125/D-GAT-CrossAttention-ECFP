@@ -65,14 +65,42 @@ for fragment_id in test_ids:
 # 检查词汇表中实际有什么
 print("\n检查词汇表实际内容:")
 if hasattr(model.wv, 'index2word'):
+    print(f"✓ 使用index2word")
+    sample_words = model.wv.index2word[:20]
+    print(f"前20个词: {sample_words}")
+
     # 尝试找到一个数字ID
-    for word in model.wv.index2word[:20]:
+    for word in sample_words:
         try:
-            # 尝试转换为整数
             int_word = int(word)
-            print(f"  词汇表包含: {word} -> 可转换为整数: {int_word}")
-            break
+            print(f"  找到整数词: {word} -> {int_word}")
         except:
-            print(f"  词汇表包含: {word} (非整数)")
+            print(f"  非整数词: '{word}' (类型: {type(word)})")
+elif hasattr(model.wv, 'vocab'):
+    print(f"✓ 使用vocab")
+    vocab_keys = list(model.wv.vocab.keys())[:20]
+    print(f"前20个键: {vocab_keys}")
+else:
+    print("✗ 无法访问词汇表")
+
+# 测试旧版本API的向量访问
+print("\n测试旧版本API访问向量:")
+if hasattr(model.wv, 'index2word') and len(model.wv.index2word) > 0:
+    first_word = model.wv.index2word[0]
+    print(f"第一个词: '{first_word}' (类型: {type(first_word)})")
+
+    # 尝试获取向量
+    try:
+        vec = model.wv[first_word]
+        print(f"✓ 成功获取向量，维度: {len(vec)}")
+    except Exception as e:
+        print(f"✗ 获取向量失败: {e}")
+
+    # 尝试通过索引访问
+    try:
+        vec = model.wv.syn0[0]
+        print(f"✓ 通过syn0[0]获取向量，维度: {len(vec)}")
+    except Exception as e:
+        print(f"✗ 通过syn0获取失败: {e}")
 
 print("\n诊断完成！")
