@@ -193,31 +193,57 @@ def load_mol2vec_model(model_path):
 
         # 检查模型属性 - 兼容不同版本的gensim
         # 首先尝试获取vector_size
-        try:
-            if hasattr(model.wv, 'vector_size'):
+        vector_size = None
+
+        # 方法1: 标准API
+        if vector_size is None and hasattr(model.wv, 'vector_size'):
+            try:
                 vector_size = model.wv.vector_size
-            elif hasattr(model, 'vector_size'):
+            except:
+                pass
+
+        # 方法2: 直接从model
+        if vector_size is None and hasattr(model, 'vector_size'):
+            try:
                 vector_size = model.vector_size
-            elif hasattr(model.wv, 'syn0'):
-                # 非常旧的版本使用syn0
+            except:
+                pass
+
+        # 方法3: 旧版本使用syn0
+        if vector_size is None and hasattr(model.wv, 'syn0'):
+            try:
                 vector_size = model.wv.syn0.shape[1]
-            elif hasattr(model.wv, 'vectors'):
+                print(f"  检测方法: syn0 (旧版本gensim)")
+            except Exception as e:
+                print(f"  警告: 从syn0获取维度失败: {e}")
+
+        # 方法4: 新版本使用vectors
+        if vector_size is None and hasattr(model.wv, 'vectors'):
+            try:
                 vector_size = model.wv.vectors.shape[1]
-            else:
-                # 最后的尝试：看看能否从wv中获取任何向量
-                try:
-                    # 尝试访问第一个向量
-                    first_key = next(iter(model.wv.key_to_index.keys() if hasattr(model.wv, 'key_to_index')
-                                          else model.wv.vocab.keys() if hasattr(model.wv, 'vocab')
-                                          else model.wv.index2word))
+            except:
+                pass
+
+        # 方法5: 尝试获取第一个向量
+        if vector_size is None:
+            try:
+                # 尝试多种方式获取第一个key
+                if hasattr(model.wv, 'index2word') and len(model.wv.index2word) > 0:
+                    first_key = model.wv.index2word[0]
                     vector_size = len(model.wv[first_key])
-                except:
-                    vector_size = 300  # 默认假设300维
-                    print(f"  警告: 无法自动检测维度，使用默认值 300")
-        except Exception as e:
-            print(f"  警告: 获取vector_size时出错: {e}")
-            vector_size = 300  # 默认值
-            print(f"  使用默认维度: {vector_size}")
+                elif hasattr(model.wv, 'index_to_key') and len(model.wv.index_to_key) > 0:
+                    first_key = model.wv.index_to_key[0]
+                    vector_size = len(model.wv[first_key])
+                elif hasattr(model.wv, 'vocab'):
+                    first_key = next(iter(model.wv.vocab.keys()))
+                    vector_size = len(model.wv[first_key])
+            except Exception as e:
+                print(f"  警告: 从向量获取维度失败: {e}")
+
+        # 最后的fallback
+        if vector_size is None:
+            vector_size = 300  # 默认假设300维
+            print(f"  警告: 无法自动检测维度，使用默认值 300")
 
         # 兼容旧版本gensim (使用index2word) 和新版本 (使用index_to_key)
         try:
