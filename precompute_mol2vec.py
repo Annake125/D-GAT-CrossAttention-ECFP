@@ -191,16 +191,31 @@ def load_mol2vec_model(model_path):
                 model = pickle.load(f)
             print(f"  格式: 自动检测 (Pickle)")
 
-        # 检查模型属性
+        # 检查模型属性 - 兼容不同版本的gensim
         vector_size = model.wv.vector_size
-        vocab_size = len(model.wv)
+
+        # 兼容旧版本gensim (使用index2word) 和新版本 (使用index_to_key)
+        try:
+            if hasattr(model.wv, 'index_to_key'):
+                vocab_size = len(model.wv.index_to_key)
+                sample_words = list(model.wv.index_to_key)[:5]
+            elif hasattr(model.wv, 'index2word'):
+                vocab_size = len(model.wv.index2word)
+                sample_words = list(model.wv.index2word)[:5]
+            else:
+                # 最后尝试直接获取
+                vocab_size = len(model.wv.vectors)
+                sample_words = ["(无法获取词汇)"]
+        except Exception as e:
+            print(f"  警告: 无法获取词汇表信息: {e}")
+            vocab_size = len(model.wv.vectors) if hasattr(model.wv, 'vectors') else 0
+            sample_words = []
 
         print(f"  嵌入维度: {vector_size}")
         print(f"  词汇表大小: {vocab_size:,} 个片段")
 
-        # 显示几个样本词
-        sample_words = list(model.wv.key_to_index.keys())[:5]
-        print(f"  样本片段ID: {sample_words}")
+        if sample_words:
+            print(f"  样本片段ID: {sample_words}")
 
         return model, vector_size
 
