@@ -37,6 +37,98 @@ except ImportError:
     from rdkit.Chem import AllChem
 
 
+# ============== Gensim兼容层 ==============
+class GensimModelWrapper:
+    """
+    兼容所有版本gensim的包装器
+    处理从非常旧的版本(syn0, index2word)到最新版本(vectors, index_to_key)
+    """
+    def __init__(self, model):
+        self.model = model
+        self.wv = model.wv
+
+        # 确定词汇表访问方式
+        self.vocab_dict = None
+        self.index2word_list = None
+
+        # 尝试建立词汇表映射
+        if hasattr(self.wv, 'key_to_index'):
+            # Gensim 4.x+
+            self.vocab_dict = self.wv.key_to_index
+            self.index2word_list = self.wv.index_to_key
+        elif hasattr(self.wv, 'vocab'):
+            # Gensim 1.x-3.x
+            try:
+                self.vocab_dict = self.wv.vocab
+                if hasattr(self.wv, 'index2word'):
+                    self.index2word_list = self.wv.index2word
+            except:
+                pass
+        elif hasattr(self.wv, 'index2word'):
+            # 可能有index2word但没有vocab的版本
+            try:
+                self.index2word_list = self.wv.index2word
+                # 手动构建vocab字典
+                self.vocab_dict = {word: idx for idx, word in enumerate(self.index2word_list)}
+            except:
+                pass
+
+    def get_vector(self, word):
+        """
+        获取词向量，兼容所有gensim版本
+        返回: numpy array 或 None (如果词不存在)
+        """
+        try:
+            # 方法1: 标准访问 (适用于大多数版本)
+            if hasattr(self.wv, '__getitem__'):
+                return self.wv[word]
+        except (KeyError, ValueError):
+            pass
+
+        try:
+            # 方法2: 通过index访问 (适用于旧版本)
+            if self.vocab_dict is not None and word in self.vocab_dict:
+                if hasattr(self.wv, 'syn0'):
+                    # 非常旧的版本
+                    if isinstance(self.vocab_dict[word], int):
+                        idx = self.vocab_dict[word]
+                    else:
+                        idx = self.vocab_dict[word].index
+                    return self.wv.syn0[idx]
+                elif hasattr(self.wv, 'vectors'):
+                    idx = self.vocab_dict[word] if isinstance(self.vocab_dict[word], int) else self.vocab_dict[word].index
+                    return self.wv.vectors[idx]
+        except:
+            pass
+
+        try:
+            # 方法3: 直接从word获取 (某些版本)
+            if hasattr(self.wv, 'word_vec'):
+                return self.wv.word_vec(word)
+        except:
+            pass
+
+        return None
+
+    def contains(self, word):
+        """
+        检查词是否在词汇表中
+        """
+        # 方法1: 使用vocab_dict
+        if self.vocab_dict is not None:
+            return word in self.vocab_dict
+
+        # 方法2: 尝试 __contains__
+        try:
+            return word in self.wv
+        except:
+            pass
+
+        # 方法3: 尝试获取向量
+        vec = self.get_vector(word)
+        return vec is not None
+
+
 # ============== 备用实现（如果没有安装mol2vec库） ==============
 class MolSentenceBackup:
     """备用实现：将分子表示为Morgan片段的"句子" """
@@ -79,9 +171,12 @@ def mol_to_sentence_backup(smiles, radius=1):
         return None
 
 
-def compute_mol2vec_embedding_backup(smiles, model, radius=1, vector_size=300):
+def compute_mol2vec_embedding_backup(smiles, model_wrapper, radius=1, vector_size=300):
     """
     备用实现：使用预训练的Mol2Vec模型计算分子嵌入
+
+    参数:
+        model_wrapper: GensimModelWrapper对象（兼容所有gensim版本）
     """
     try:
         sentence = mol_to_sentence_backup(smiles, radius=radius)
@@ -93,8 +188,10 @@ def compute_mol2vec_embedding_backup(smiles, model, radius=1, vector_size=300):
         vectors = []
         for word in sentence:
             try:
-                if word in model.wv:
-                    vectors.append(model.wv[word])
+                if model_wrapper.contains(word):
+                    vec = model_wrapper.get_vector(word)
+                    if vec is not None:
+                        vectors.append(vec)
             except:
                 # 如果片段不在词汇表中,跳过
                 pass
@@ -112,9 +209,12 @@ def compute_mol2vec_embedding_backup(smiles, model, radius=1, vector_size=300):
 
 
 # ============== 官方mol2vec实现（推荐） ==============
-def compute_mol2vec_embedding_official(smiles, model, radius=1, vector_size=300):
+def compute_mol2vec_embedding_official(smiles, model_wrapper, radius=1, vector_size=300):
     """
     使用官方mol2vec库计算分子嵌入
+
+    参数:
+        model_wrapper: GensimModelWrapper对象（兼容所有gensim版本）
     """
     try:
         mol = Chem.MolFromSmiles(smiles.strip())
@@ -132,8 +232,10 @@ def compute_mol2vec_embedding_official(smiles, model, radius=1, vector_size=300)
         vectors = []
         for word in sentence:
             try:
-                if word in model.wv:
-                    vectors.append(model.wv[word])
+                if model_wrapper.contains(word):
+                    vec = model_wrapper.get_vector(word)
+                    if vec is not None:
+                        vectors.append(vec)
             except:
                 pass
 
@@ -148,14 +250,20 @@ def compute_mol2vec_embedding_official(smiles, model, radius=1, vector_size=300)
 
 
 # ============== 统一接口 ==============
-def compute_mol2vec_embedding(smiles, model, radius=1, vector_size=300):
+def compute_mol2vec_embedding(smiles, model_wrapper, radius=1, vector_size=300):
     """
     自动选择最佳实现来计算Mol2Vec嵌入
+
+    参数:
+        smiles: SMILES字符串
+        model_wrapper: GensimModelWrapper对象（兼容所有gensim版本）
+        radius: Morgan片段半径
+        vector_size: 嵌入向量维度
     """
     if HAS_MOL2VEC:
-        return compute_mol2vec_embedding_official(smiles, model, radius, vector_size)
+        return compute_mol2vec_embedding_official(smiles, model_wrapper, radius, vector_size)
     else:
-        return compute_mol2vec_embedding_backup(smiles, model, radius, vector_size)
+        return compute_mol2vec_embedding_backup(smiles, model_wrapper, radius, vector_size)
 
 
 def load_mol2vec_model(model_path):
@@ -280,7 +388,11 @@ def load_mol2vec_model(model_path):
         if sample_words:
             print(f"  样本片段ID: {sample_words}")
 
-        return model, vector_size
+        # 创建兼容性包装器
+        model_wrapper = GensimModelWrapper(model)
+        print(f"  ✓ 已创建gensim兼容性包装器")
+
+        return model_wrapper, vector_size
 
     except Exception as e:
         print(f"\n错误: 无法加载模型")
@@ -340,7 +452,7 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
         raise FileNotFoundError(f"数据文件不存在: {csv_path}")
 
     # 加载Mol2Vec模型
-    model, vector_size = load_mol2vec_model(model_path)
+    model_wrapper, vector_size = load_mol2vec_model(model_path)
 
     # 读取数据
     print(f"\n加载数据...")
@@ -386,7 +498,7 @@ def precompute_moses_mol2vec(csv_path, model_path, output_path=None, radius=1):
             invalid_smiles.append("(empty)")
             continue
 
-        emb = compute_mol2vec_embedding(smiles, model, radius=radius, vector_size=vector_size)
+        emb = compute_mol2vec_embedding(smiles, model_wrapper, radius=radius, vector_size=vector_size)
 
         if emb is None:
             invalid_indices.append(idx)
